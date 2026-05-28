@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#fdf6f0">
+  <title>赤ちゃんの心拍</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Yu Gothic', sans-serif;
+      background: #fdf6f0;
+      color: #3d2b1f;
+      min-height: 100vh;
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 28px 20px 48px;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      letter-spacing: 0.05em;
+    }
+
+    .subtitle {
+      text-align: center;
+      font-size: 13px;
+      color: #a0756a;
+      margin-bottom: 24px;
+    }
+
+    /* Tips */
+    .tips-toggle {
+      width: 100%;
+      background: #fff0ec;
+      border: 1px solid #f0c4b4;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-size: 14px;
+      color: #c0604a;
+      cursor: pointer;
+      text-align: left;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .tips-content {
+      background: #fff8f5;
+      border: 1px solid #f0c4b4;
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 20px;
+      display: none;
+    }
+
+    .tips-content.open { display: block; }
+
+    .tips-content li {
+      font-size: 13px;
+      line-height: 2;
+      margin-left: 16px;
+      color: #5a3a2a;
+    }
+
+    /* Card */
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+
+    .card-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #a0756a;
+      letter-spacing: 0.08em;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+    }
+
+    /* Record button */
+    .record-btn {
+      width: 100%;
+      height: 72px;
+      border-radius: 36px;
+      border: none;
+      font-size: 18px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.15s;
+      letter-spacing: 0.03em;
+    }
+
+    .record-btn.idle {
+      background: linear-gradient(135deg, #f0826c, #e85a8a);
+      color: white;
+    }
+
+    .record-btn.recording {
+      background: linear-gradient(135deg, #e85a5a, #c03030);
+      color: white;
+      animation: pulse 1s ease-in-out infinite;
+    }
+
+    .record-btn:active { opacity: 0.8; transform: scale(0.98); }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.03); }
+    }
+
+    .record-timer {
+      text-align: center;
+      font-size: 32px;
+      font-weight: 200;
+      color: #e85a8a;
+      margin-top: 14px;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.05em;
+      display: none;
+    }
+
+    /* Upload */
+    .upload-area {
+      border: 2px dashed #f0c4b4;
+      border-radius: 12px;
+      padding: 22px 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: background 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .upload-area:active { background: #fff0ec; }
+    .upload-area p { font-size: 14px; color: #a0756a; }
+    .upload-area .hint { font-size: 11px; color: #c0a090; margin-top: 4px; }
+
+    #file-input { display: none; }
+
+    .file-name {
+      font-size: 13px;
+      color: #5a8a6a;
+      margin-top: 10px;
+      font-weight: 600;
+      word-break: break-all;
+    }
+
+    /* Analyze */
+    .analyze-btn {
+      width: 100%;
+      height: 56px;
+      border-radius: 28px;
+      border: none;
+      background: linear-gradient(135deg, #7dc9a0, #4aaa7a);
+      color: white;
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+      display: none;
+      transition: opacity 0.15s;
+      margin-top: 4px;
+    }
+
+    .analyze-btn:active { opacity: 0.8; }
+
+    /* Progress */
+    .progress-wrap {
+      display: none;
+      padding: 20px 0 8px;
+    }
+
+    .progress-bar-bg {
+      height: 8px;
+      background: #f0e0d8;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #f0826c, #e85a8a);
+      border-radius: 4px;
+      width: 0%;
+      transition: width 0.4s ease;
+    }
+
+    .progress-label {
+      font-size: 13px;
+      color: #a0756a;
+      text-align: center;
+    }
+
+    /* Error */
+    .error-msg {
+      display: none;
+      background: #fff0f0;
+      border: 1px solid #f0c0c0;
+      border-radius: 12px;
+      padding: 18px;
+      text-align: center;
+      color: #c04040;
+      font-size: 15px;
+      line-height: 1.7;
+      margin-bottom: 12px;
+    }
+
+    .retry-btn {
+      width: 100%;
+      height: 48px;
+      border-radius: 24px;
+      border: 1.5px solid #f0c4b4;
+      background: white;
+      color: #c0604a;
+      font-size: 15px;
+      cursor: pointer;
+      display: none;
+      margin-bottom: 16px;
+    }
+
+    /* Results */
+    .results-wrap { display: none; }
+
+    .bpm-display {
+      text-align: center;
+      padding: 12px 0 16px;
+    }
+
+    .bpm-number {
+      font-size: 80px;
+      font-weight: 200;
+      color: #e85a8a;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .bpm-label {
+      font-size: 16px;
+      color: #a0756a;
+      margin-top: 6px;
+    }
+
+    .bpm-note {
+      font-size: 12px;
+      color: #c0a090;
+      margin-top: 6px;
+    }
+
+    canvas {
+      width: 100%;
+      height: 140px;
+      border-radius: 8px;
+      background: #fff8f5;
+      display: block;
+    }
+
+    .canvas-label {
+      font-size: 11px;
+      color: #c0a090;
+      margin-top: 6px;
+      margin-bottom: 16px;
+    }
+
+    /* Slider */
+    .slider-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .slider-label { font-size: 13px; color: #7a5a4a; white-space: nowrap; }
+
+    input[type=range] {
+      flex: 1;
+      accent-color: #e85a8a;
+      height: 4px;
+    }
+
+    .reanalyze-btn {
+      width: 100%;
+      height: 44px;
+      border-radius: 22px;
+      border: none;
+      background: linear-gradient(135deg, #7dc9a0, #4aaa7a);
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 14px;
+      transition: opacity 0.15s;
+    }
+
+    .reanalyze-btn:active { opacity: 0.8; }
+
+    /* Download */
+    .download-btn {
+      width: 100%;
+      height: 56px;
+      border-radius: 28px;
+      border: none;
+      background: linear-gradient(135deg, #9ab0e8, #6a80c8);
+      color: white;
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+
+    .download-btn:active { opacity: 0.8; }
+  </style>
+</head>
+<body>
+
+<h1>赤ちゃんの心拍</h1>
+<p class="subtitle">録音して心拍を抽出します</p>
+
+<button class="tips-toggle" id="tips-toggle">
+  録音のコツ <span id="tips-arrow">▼</span>
+</button>
+<div class="tips-content" id="tips-content">
+  <ul>
+    <li>静かな部屋で行いましょう</li>
+    <li>iPhoneをお腹にしっかり押し当ててください</li>
+    <li>マイクはiPhoneの下側（充電口の横）です</li>
+    <li>息をゆっくり、できるだけ静かにしてください</li>
+    <li>1分以上録音すると検出しやすくなります</li>
+  </ul>
+</div>
+
+<div class="card" style="padding:16px 14px 18px">
+  <div class="card-title">押し当て方ガイド</div>
+  <svg viewBox="0 0 315 270" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block" aria-label="押し当て方のイラスト">
+
+    <!-- ── LEFT: お腹のどこに当てるか ── -->
+    <text x="76" y="13" text-anchor="middle" font-size="11" font-weight="700" fill="#7a5a4a">当てる位置</text>
+
+    <!-- Torso outline -->
+    <path d="M20,18 C7,46 5,84 7,123 L7,260 L145,260 L145,123 C147,84 145,46 132,18 Z"
+          fill="#fce8d8" stroke="#f0c4a0" stroke-width="1.5"/>
+    <!-- Belly bump -->
+    <ellipse cx="76" cy="178" rx="56" ry="65" fill="#f8d0b8" stroke="#f0c0a0" stroke-width="1.5"/>
+    <!-- Navel -->
+    <ellipse cx="76" cy="141" rx="5" ry="6.5" fill="#e8c0a0" stroke="#c8906a" stroke-width="1"/>
+    <text x="88" y="145" font-size="9.5" fill="#a07858">おへそ</text>
+
+    <!-- Target zone (dashed ellipse) -->
+    <ellipse cx="76" cy="192" rx="36" ry="32"
+             fill="rgba(232,90,138,0.13)"
+             stroke="#e85a8a" stroke-width="2" stroke-dasharray="5,4"/>
+
+    <!-- Target label -->
+    <text x="76" y="237" text-anchor="middle" font-size="11" font-weight="700" fill="#e85a8a">ここに当てる</text>
+    <text x="76" y="251" text-anchor="middle" font-size="9" fill="#c0a090">（おへその下あたり）</text>
+
+
+    <!-- ── DIVIDER ── -->
+    <line x1="156" y1="16" x2="156" y2="263" stroke="#f0ddd5" stroke-width="1"/>
+
+
+    <!-- ── RIGHT: iPhoneの向き ── -->
+    <text x="237" y="13" text-anchor="middle" font-size="11" font-weight="700" fill="#7a5a4a">iPhoneの向き</text>
+
+    <!-- iPhone body -->
+    <rect x="197" y="17" width="80" height="158" rx="14" fill="#1c1c1e"/>
+    <!-- Screen -->
+    <rect x="201" y="26" width="72" height="134" rx="10" fill="#182030"/>
+    <!-- Dynamic Island -->
+    <rect x="221" y="22" width="32" height="10" rx="5" fill="#0a0a0a"/>
+    <!-- Left buttons -->
+    <rect x="194" y="50" width="3" height="15" rx="1.5" fill="#3a3a3a"/>
+    <rect x="194" y="69" width="3" height="15" rx="1.5" fill="#3a3a3a"/>
+    <!-- Right button -->
+    <rect x="277" y="57" width="3" height="25" rx="1.5" fill="#3a3a3a"/>
+
+    <!-- Screen content: heartbeat waveform -->
+    <line x1="205" y1="93" x2="270" y2="93" stroke="#3a6080" stroke-width="0.5" opacity="0.5"/>
+    <polyline
+      points="205,93 211,93 213,81 215,108 217,93 227,93 229,81 231,108 233,93 243,93 245,81 247,108 249,93 270,93"
+      stroke="#e85a8a" stroke-width="1.5" fill="none"
+      stroke-linejoin="round" stroke-linecap="round" opacity="0.75"/>
+    <text x="237" y="128" text-anchor="middle" font-size="15" fill="#e85a8a" opacity="0.7" font-weight="200">140 BPM</text>
+
+    <!-- Bottom edge: USB-C + mic + speaker -->
+    <rect x="228" y="168" width="20" height="7" rx="3.5" fill="#2c2c2e"/>
+    <circle cx="215" cy="171" r="2" fill="#3a3a3a"/>
+    <circle cx="221" cy="171" r="2" fill="#3a3a3a"/>
+    <circle cx="254" cy="171" r="2" fill="#3a3a3a"/>
+    <circle cx="260" cy="171" r="2" fill="#3a3a3a"/>
+
+    <!-- Mic highlight ring -->
+    <ellipse cx="218" cy="171" rx="12" ry="8"
+             fill="rgba(232,90,138,0.30)"
+             stroke="#e85a8a" stroke-width="1.5"/>
+
+    <!-- Down arrow (this end → belly) -->
+    <line x1="237" y1="178" x2="237" y2="207" stroke="#e85a8a" stroke-width="2"/>
+    <polygon points="237,216 231,206 243,206" fill="#e85a8a"/>
+
+    <!-- Bottom label -->
+    <text x="237" y="232" text-anchor="middle" font-size="10" font-weight="700" fill="#e85a8a">マイク側（下端）を</text>
+    <text x="237" y="247" text-anchor="middle" font-size="10" font-weight="700" fill="#e85a8a">お腹に当てる</text>
+
+  </svg>
+</div>
+
+<div class="card">
+  <div class="card-title">録音する</div>
+  <button class="record-btn idle" id="record-btn">録音を開始する</button>
+  <div class="record-timer" id="record-timer">0:00</div>
+</div>
+
+<div class="card">
+  <div class="card-title">または録音ファイルを選ぶ</div>
+  <div class="upload-area" id="upload-area">
+    <p>タップしてファイルを選択</p>
+    <p class="hint">ボイスメモ・動画 対応</p>
+    <div class="file-name" id="file-name"></div>
+  </div>
+  <input type="file" id="file-input" accept="audio/*,video/*">
+</div>
+
+<button class="analyze-btn" id="analyze-btn">分析する</button>
+
+<div class="progress-wrap" id="progress-wrap">
+  <div class="progress-bar-bg">
+    <div class="progress-bar" id="progress-bar"></div>
+  </div>
+  <div class="progress-label" id="progress-label">フィルタを適用しています...</div>
+</div>
+
+<div class="error-msg" id="error-msg">
+  録音に失敗しました。<br>
+  静かな場所でもう一度お試しください。
+</div>
+<button class="retry-btn" id="retry-btn">もう一度やり直す</button>
+
+<div class="results-wrap" id="results-wrap">
+  <div class="card">
+    <div class="bpm-display">
+      <div class="bpm-number" id="bpm-number">--</div>
+      <div class="bpm-label">BPM（推定心拍数）</div>
+      <div class="bpm-note">正常範囲：120〜160 BPM（妊娠中期）</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">フィルタ後の波形</div>
+    <canvas id="waveform-canvas"></canvas>
+    <div class="canvas-label">心拍成分を抽出した波形です</div>
+
+    <div class="card-title">感度調整</div>
+    <div class="slider-row">
+      <span class="slider-label">低</span>
+      <input type="range" id="sensitivity" min="1" max="5" value="3" step="1">
+      <span class="slider-label">高</span>
+    </div>
+    <button class="reanalyze-btn" id="re-analyze-btn">感度を変えて再分析する</button>
+  </div>
+
+  <div class="card">
+    <div class="card-title">心拍音源をダウンロード</div>
+    <button class="download-btn" id="download-btn">WAVファイルを保存する</button>
+  </div>
+</div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────
+let mediaRecorder = null;
+let recordedChunks = [];
+let recordingTimer = null;
+let recordingSeconds = 0;
+let audioBuffer = null;
+let filteredBuffer = null;
+let wavBlob = null;
+
+// ─── Tips ─────────────────────────────────────────────────────
+document.getElementById('tips-toggle').addEventListener('click', () => {
+  const content = document.getElementById('tips-content');
+  const arrow = document.getElementById('tips-arrow');
+  content.classList.toggle('open');
+  arrow.textContent = content.classList.contains('open') ? '▲' : '▼';
+});
+
+// ─── Recording ────────────────────────────────────────────────
+const recordBtn = document.getElementById('record-btn');
+const recordTimer = document.getElementById('record-timer');
+
+recordBtn.addEventListener('click', async () => {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    stopRecording();
+  } else {
+    await startRecording();
+  }
+});
+
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    recordedChunks = [];
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4';
+    mediaRecorder = new MediaRecorder(stream, { mimeType });
+
+    mediaRecorder.ondataavailable = e => {
+      if (e.data.size > 0) recordedChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType });
+      await loadAudioBlob(blob);
+    };
+
+    mediaRecorder.start(1000);
+    recordingSeconds = 0;
+    recordBtn.textContent = '録音を停止する';
+    recordBtn.className = 'record-btn recording';
+    recordTimer.style.display = 'block';
+
+    recordingTimer = setInterval(() => {
+      recordingSeconds++;
+      const m = Math.floor(recordingSeconds / 60);
+      const s = recordingSeconds % 60;
+      recordTimer.textContent = `${m}:${String(s).padStart(2, '0')}`;
+    }, 1000);
+
+  } catch (e) {
+    alert('マイクへのアクセスを許可してください');
+  }
+}
+
+function stopRecording() {
+  clearInterval(recordingTimer);
+  recordBtn.textContent = '録音を開始する';
+  recordBtn.className = 'record-btn idle';
+  recordTimer.style.display = 'none';
+  mediaRecorder.stop();
+}
+
+// ─── File upload ──────────────────────────────────────────────
+document.getElementById('upload-area').addEventListener('click', () => {
+  document.getElementById('file-input').click();
+});
+
+document.getElementById('file-input').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  document.getElementById('file-name').textContent = file.name;
+  await loadAudioBlob(file);
+});
+
+// ─── Load audio ───────────────────────────────────────────────
+async function loadAudioBlob(blob) {
+  try {
+    const arrayBuffer = await blob.arrayBuffer();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+    ctx.close();
+    document.getElementById('analyze-btn').style.display = 'block';
+    hideResults();
+    hideError();
+  } catch (e) {
+    showError();
+  }
+}
+
+// ─── Analyze ──────────────────────────────────────────────────
+document.getElementById('analyze-btn').addEventListener('click', () => analyze());
+document.getElementById('re-analyze-btn').addEventListener('click', () => analyze());
+
+async function analyze() {
+  if (!audioBuffer) return;
+
+  hideResults();
+  hideError();
+
+  const progressWrap = document.getElementById('progress-wrap');
+  const progressBar = document.getElementById('progress-bar');
+  const progressLabel = document.getElementById('progress-label');
+
+  progressWrap.style.display = 'block';
+  progressBar.style.width = '0%';
+  progressLabel.textContent = 'フィルタを適用しています...';
+  await sleep(50);
+
+  try {
+    filteredBuffer = await applyBandpassFilter(audioBuffer);
+    progressBar.style.width = '55%';
+    progressLabel.textContent = '心拍を検出しています...';
+    await sleep(50);
+
+    const bpm = detectBPM(filteredBuffer);
+    progressBar.style.width = '80%';
+    progressLabel.textContent = '音源を生成しています...';
+    await sleep(50);
+
+    wavBlob = encodeWAVFromBuffer(filteredBuffer);
+    progressBar.style.width = '100%';
+    await sleep(250);
+    progressWrap.style.display = 'none';
+
+    if (bpm === null) {
+      showError();
+      return;
+    }
+
+    document.getElementById('bpm-number').textContent = Math.round(bpm);
+    drawWaveform(filteredBuffer);
+    document.getElementById('results-wrap').style.display = 'block';
+    document.getElementById('results-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  } catch (e) {
+    progressWrap.style.display = 'none';
+    showError();
+  }
+}
+
+// ─── Bandpass filter ──────────────────────────────────────────
+async function applyBandpassFilter(buffer) {
+  const sensitivity = parseInt(document.getElementById('sensitivity').value);
+  const gainAmount = 4 + (sensitivity - 1) * 6; // 4〜28
+
+  const sampleRate = buffer.sampleRate;
+  const length = buffer.length;
+  const offlineCtx = new OfflineAudioContext(1, length, sampleRate);
+
+  // Mix down to mono
+  const monoBuffer = offlineCtx.createBuffer(1, length, sampleRate);
+  const monoData = monoBuffer.getChannelData(0);
+  const ch0 = buffer.getChannelData(0);
+  if (buffer.numberOfChannels > 1) {
+    const ch1 = buffer.getChannelData(1);
+    for (let i = 0; i < length; i++) monoData[i] = (ch0[i] + ch1[i]) * 0.5;
+  } else {
+    monoData.set(ch0);
+  }
+
+  const source = offlineCtx.createBufferSource();
+  source.buffer = monoBuffer;
+
+  const hp = offlineCtx.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 20;
+  hp.Q.value = 0.7;
+
+  const lp = offlineCtx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 150;
+  lp.Q.value = 0.7;
+
+  const gain = offlineCtx.createGain();
+  gain.gain.value = gainAmount;
+
+  source.connect(hp);
+  hp.connect(lp);
+  lp.connect(gain);
+  gain.connect(offlineCtx.destination);
+
+  source.start(0);
+  return await offlineCtx.startRendering();
+}
+
+// ─── BPM detection ────────────────────────────────────────────
+function detectBPM(buffer) {
+  const data = buffer.getChannelData(0);
+  const sampleRate = buffer.sampleRate;
+
+  // Rectify + 10ms moving average → envelope
+  const windowMs10 = Math.floor(sampleRate * 0.01);
+  const envelope = new Float32Array(data.length);
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) {
+    sum += Math.abs(data[i]);
+    if (i >= windowMs10) sum -= Math.abs(data[i - windowMs10]);
+    envelope[i] = sum / windowMs10;
+  }
+
+  // Smooth further with 50ms window
+  const windowMs50 = Math.floor(sampleRate * 0.05);
+  const smoothed = new Float32Array(data.length);
+  let sum2 = 0;
+  for (let i = 0; i < data.length; i++) {
+    sum2 += envelope[i];
+    if (i >= windowMs50) sum2 -= envelope[i - windowMs50];
+    smoothed[i] = sum2 / windowMs50;
+  }
+
+  // Adaptive threshold
+  let mean = 0;
+  for (let i = 0; i < smoothed.length; i++) mean += smoothed[i];
+  mean /= smoothed.length;
+  const threshold = mean * 1.5;
+
+  // Peak detection (min distance = 0.27s = max 220 BPM)
+  const minDist = Math.floor(sampleRate * 0.27);
+  const peaks = [];
+  let lastPeak = -minDist;
+
+  for (let i = 1; i < smoothed.length - 1; i++) {
+    if (smoothed[i] > threshold &&
+        smoothed[i] >= smoothed[i - 1] &&
+        smoothed[i] >= smoothed[i + 1] &&
+        i - lastPeak >= minDist) {
+      peaks.push(i);
+      lastPeak = i;
+    }
+  }
+
+  if (peaks.length < 3) return null;
+
+  // Median interval → BPM
+  const intervals = [];
+  for (let i = 1; i < peaks.length; i++) intervals.push(peaks[i] - peaks[i - 1]);
+  intervals.sort((a, b) => a - b);
+  const median = intervals[Math.floor(intervals.length / 2)];
+  const bpm = (sampleRate / median) * 60;
+
+  if (bpm < 80 || bpm > 220) return null;
+  return bpm;
+}
+
+// ─── Waveform canvas ──────────────────────────────────────────
+function drawWaveform(buffer) {
+  const canvas = document.getElementById('waveform-canvas');
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.offsetWidth;
+  const h = 140;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const data = buffer.getChannelData(0);
+  const step = Math.ceil(data.length / w);
+
+  ctx.fillStyle = '#fff8f5';
+  ctx.fillRect(0, 0, w, h);
+
+  // Center line
+  ctx.beginPath();
+  ctx.strokeStyle = '#f0d0d8';
+  ctx.lineWidth = 0.5;
+  ctx.moveTo(0, h / 2);
+  ctx.lineTo(w, h / 2);
+  ctx.stroke();
+
+  // Waveform
+  ctx.beginPath();
+  ctx.strokeStyle = '#e85a8a';
+  ctx.lineWidth = 1.5;
+
+  for (let x = 0; x < w; x++) {
+    let min = 1, max = -1;
+    for (let j = 0; j < step; j++) {
+      const v = data[x * step + j];
+      if (v !== undefined) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+    }
+    const yMin = ((min + 1) / 2) * h;
+    const yMax = ((max + 1) / 2) * h;
+    if (x === 0) ctx.moveTo(x, h / 2);
+    ctx.lineTo(x, yMin);
+    ctx.lineTo(x, yMax);
+  }
+  ctx.stroke();
+}
+
+// ─── WAV encoding ─────────────────────────────────────────────
+function encodeWAVFromBuffer(buffer) {
+  const data = buffer.getChannelData(0);
+  const sampleRate = buffer.sampleRate;
+  const n = data.length;
+  const wavBuf = new ArrayBuffer(44 + n * 2);
+  const view = new DataView(wavBuf);
+
+  const str = (offset, s) => { for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i)); };
+
+  str(0, 'RIFF');
+  view.setUint32(4, 36 + n * 2, true);
+  str(8, 'WAVE');
+  str(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);   // PCM
+  view.setUint16(22, 1, true);   // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  str(36, 'data');
+  view.setUint32(40, n * 2, true);
+
+  for (let i = 0; i < n; i++) {
+    const s = Math.max(-1, Math.min(1, data[i]));
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+
+  return new Blob([wavBuf], { type: 'audio/wav' });
+}
+
+// ─── Download ─────────────────────────────────────────────────
+document.getElementById('download-btn').addEventListener('click', () => {
+  if (!wavBlob) return;
+  const url = URL.createObjectURL(wavBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  const d = new Date();
+  const ds = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+  a.download = `heartbeat_${ds}.wav`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+// ─── Helpers ──────────────────────────────────────────────────
+function showError() {
+  document.getElementById('error-msg').style.display = 'block';
+  document.getElementById('retry-btn').style.display = 'block';
+}
+
+function hideError() {
+  document.getElementById('error-msg').style.display = 'none';
+  document.getElementById('retry-btn').style.display = 'none';
+}
+
+function hideResults() {
+  document.getElementById('results-wrap').style.display = 'none';
+}
+
+document.getElementById('retry-btn').addEventListener('click', () => {
+  hideError();
+  audioBuffer = null;
+  filteredBuffer = null;
+  wavBlob = null;
+  document.getElementById('analyze-btn').style.display = 'none';
+  document.getElementById('file-name').textContent = '';
+  document.getElementById('file-input').value = '';
+  recordedChunks = [];
+});
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+</script>
+</body>
+</html>
