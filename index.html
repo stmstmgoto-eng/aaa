@@ -596,12 +596,17 @@ async function analyze() {
 
   try {
     filteredBuffer = await applyBandpassFilter(audioBuffer);
-    progressBar.style.width = '55%';
+    progressBar.style.width = '45%';
+    progressLabel.textContent = 'ノイズを除去しています...';
+    await sleep(50);
+
+    applyNoiseGate(filteredBuffer);
+    progressBar.style.width = '65%';
     progressLabel.textContent = '心拍を検出しています...';
     await sleep(50);
 
     const bpm = detectBPM(filteredBuffer);
-    progressBar.style.width = '75%';
+    progressBar.style.width = '80%';
     progressLabel.textContent = '音源を生成しています...';
     await sleep(50);
 
@@ -617,7 +622,6 @@ async function analyze() {
     }
 
     document.getElementById('bpm-number').textContent = Math.round(bpm);
-    drawWaveform(filteredBuffer);
 
     const audioEl = document.getElementById('result-audio');
     if (audioEl._blobUrl) URL.revokeObjectURL(audioEl._blobUrl);
@@ -626,6 +630,8 @@ async function analyze() {
 
     document.getElementById('results-wrap').style.display = 'block';
     document.getElementById('results-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // results-wrap が visible になってから canvas サイズを確定して描画
+    requestAnimationFrame(() => drawWaveform(filteredBuffer));
 
   } catch (e) {
     progressWrap.style.display = 'none';
@@ -749,11 +755,55 @@ function normalizeBuffer(buffer) {
   for (let i = 0; i < data.length; i++) data[i] *= scale;
 }
 
+// ─── Noise gate ───────────────────────────────────────────────
+function applyNoiseGate(buffer) {
+  const data = buffer.getChannelData(0);
+  const sampleRate = buffer.sampleRate;
+  const winSamples = Math.floor(sampleRate * 0.02); // 20ms RMS window
+  const hopSamples = Math.floor(sampleRate * 0.01); // 10ms hop for floor estimation
+
+  // Estimate noise floor: 25th percentile of RMS across hops
+  const numHops = Math.floor(data.length / hopSamples);
+  const rmsHops = new Float32Array(numHops);
+  for (let h = 0; h < numHops; h++) {
+    const start = h * hopSamples;
+    const end = Math.min(start + winSamples, data.length);
+    let sq = 0;
+    for (let i = start; i < end; i++) sq += data[i] * data[i];
+    rmsHops[h] = Math.sqrt(sq / (end - start));
+  }
+  const sorted = Array.from(rmsHops).sort((a, b) => a - b);
+  const noiseFloor = sorted[Math.floor(sorted.length * 0.25)];
+  const threshold = noiseFloor * 3.5;
+
+  // Per-sample RMS (moving window)
+  const rms = new Float32Array(data.length);
+  let sq = 0;
+  for (let i = 0; i < data.length; i++) {
+    sq += data[i] * data[i];
+    if (i >= winSamples) sq -= data[i - winSamples] * data[i - winSamples];
+    rms[i] = Math.sqrt(sq / Math.min(i + 1, winSamples));
+  }
+
+  // Gate with 5ms attack, 150ms release
+  const attackStep  = 1 / Math.floor(sampleRate * 0.005);
+  const releaseStep = 1 / Math.floor(sampleRate * 0.15);
+  let gain = 0;
+  for (let i = 0; i < data.length; i++) {
+    const target = rms[i] > threshold ? 1 : 0;
+    gain = target > gain
+      ? Math.min(gain + attackStep, 1)
+      : Math.max(gain - releaseStep, 0);
+    data[i] *= gain;
+  }
+}
+
 // ─── Waveform canvas ──────────────────────────────────────────
 function drawWaveform(buffer) {
   const canvas = document.getElementById('waveform-canvas');
   const dpr = window.devicePixelRatio || 1;
-  const w = canvas.offsetWidth;
+  // results-wrap が display:none だと offsetWidth=0 になるので親要素で補完
+  const w = canvas.offsetWidth || canvas.parentElement?.offsetWidth || 320;
   const h = 140;
   canvas.width = w * dpr;
   canvas.height = h * dpr;
@@ -761,12 +811,19 @@ function drawWaveform(buffer) {
   ctx.scale(dpr, dpr);
 
   const data = buffer.getChannelData(0);
-  const step = Math.ceil(data.length / w);
+  const step = Math.max(1, Math.ceil(data.length / w));
+
+  // 表示専用の正規化：どんなに小さい信号でも波形が見えるようにする
+  let maxAbs = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (Math.abs(data[i]) > maxAbs) maxAbs = Math.abs(data[i]);
+  }
+  const displayScale = maxAbs > 0.00001 ? (0.88 / maxAbs) : 1;
 
   ctx.fillStyle = '#fff8f5';
   ctx.fillRect(0, 0, w, h);
 
-  // Center line
+  // 中央線
   ctx.beginPath();
   ctx.strokeStyle = '#f0d0d8';
   ctx.lineWidth = 0.5;
@@ -774,25 +831,27 @@ function drawWaveform(buffer) {
   ctx.lineTo(w, h / 2);
   ctx.stroke();
 
-  // Waveform
+  // 波形：各列のmin/maxを canvas 座標へ変換して縦線で描画
   ctx.beginPath();
   ctx.strokeStyle = '#e85a8a';
   ctx.lineWidth = 1.5;
+  ctx.moveTo(0, h / 2);
 
   for (let x = 0; x < w; x++) {
-    let min = 1, max = -1;
+    let minV = 0, maxV = 0;
     for (let j = 0; j < step; j++) {
-      const v = data[x * step + j];
-      if (v !== undefined) {
-        if (v < min) min = v;
-        if (v > max) max = v;
+      const idx = x * step + j;
+      if (idx < data.length) {
+        const v = data[idx] * displayScale;
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
       }
     }
-    const yMin = ((min + 1) / 2) * h;
-    const yMax = ((max + 1) / 2) * h;
-    if (x === 0) ctx.moveTo(x, h / 2);
-    ctx.lineTo(x, yMin);
-    ctx.lineTo(x, yMax);
+    // audio v → canvas y: 正値が上、負値が下
+    const yTop    = h / 2 - maxV * (h / 2);
+    const yBottom = h / 2 - minV * (h / 2);
+    ctx.lineTo(x, yTop);
+    ctx.lineTo(x, yBottom);
   }
   ctx.stroke();
 }
