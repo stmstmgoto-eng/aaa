@@ -435,6 +435,15 @@
   <div class="record-timer" id="record-timer">0:00</div>
   <canvas id="live-canvas"
           style="display:none;width:100%;height:90px;margin-top:14px;border-radius:8px;background:#fff8f5"></canvas>
+  <div id="sig-wrap" style="display:none;margin-top:8px;padding:0 2px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:11px;color:#a0756a;white-space:nowrap;width:48px">信号強度</span>
+      <div style="flex:1;height:6px;background:#f0e0d8;border-radius:3px;overflow:hidden">
+        <div id="sig-bar" style="height:100%;border-radius:3px;width:0%;background:#e0a0a0;transition:width 0.15s,background 0.3s"></div>
+      </div>
+      <span id="sig-label" style="font-size:11px;color:#a0756a;width:48px;text-align:right">弱い</span>
+    </div>
+  </div>
 </div>
 
 <div class="card">
@@ -564,6 +573,7 @@ async function startRecording() {
     liveAnalyser.fftSize = 2048;
     liveSource.connect(liveAnalyser);
     document.getElementById('live-canvas').style.display = 'block';
+    document.getElementById('sig-wrap').style.display = 'block';
     // display:block 後にレイアウトが確定してから canvas 幅を取得する
     setTimeout(startLiveDraw, 50);
 
@@ -585,6 +595,7 @@ function stopRecording() {
   liveAnimFrame = null;
   if (liveAudioCtx) { liveAudioCtx.close(); liveAudioCtx = null; }
   document.getElementById('live-canvas').style.display = 'none';
+  document.getElementById('sig-wrap').style.display = 'none';
   recordBtn.textContent = '録音を開始する';
   recordBtn.className = 'record-btn idle';
   recordTimer.style.display = 'none';
@@ -633,6 +644,25 @@ function startLiveDraw() {
       x += sliceWidth;
     }
     ctx.stroke();
+
+    // ⑥ 信号強度バーを更新（フレームごとRMSを計算）
+    let rmsSum = 0;
+    for (let i = 0; i < bufferLength; i++) rmsSum += dataArray[i] * dataArray[i];
+    const rmsVal = Math.sqrt(rmsSum / bufferLength);
+    const sigPct = Math.min(rmsVal * 2000, 100);
+    const sigBar = document.getElementById('sig-bar');
+    const sigLabel = document.getElementById('sig-label');
+    sigBar.style.width = sigPct + '%';
+    if (sigPct < 8) {
+      sigBar.style.background = '#e0a0a0';
+      sigLabel.textContent = '弱い';
+    } else if (sigPct < 50) {
+      sigBar.style.background = '#f0c060';
+      sigLabel.textContent = '検出中';
+    } else {
+      sigBar.style.background = '#7dc9a0';
+      sigLabel.textContent = '良好';
+    }
   }
 
   frame();
@@ -676,7 +706,7 @@ async function analyze() {
   hideError();
 
   const progressWrap = document.getElementById('progress-wrap');
-  const progressBar = document.getElementById('progress-bar');
+  const progressBar  = document.getElementById('progress-bar');
   const progressLabel = document.getElementById('progress-label');
 
   progressWrap.style.display = 'block';
@@ -685,18 +715,56 @@ async function analyze() {
   await sleep(50);
 
   try {
-    filteredBuffer = await applyBandpassFilter(audioBuffer);
-    progressBar.style.width = '45%';
-    progressLabel.textContent = 'ノイズを除去しています...';
-    await sleep(50);
+    // ① 25–100Hz バンドパス（ゲイン1倍でスペクトル減算用ベースを作る）
+    const baseFiltered = await applyBandpassFilter(audioBuffer, 1);
+    progressBar.style.width = '15%';
+    progressLabel.textContent = 'スペクトルノイズを除去しています...';
+    await sleep(30);
 
-    applyNoiseGate(filteredBuffer);
-    progressBar.style.width = '65%';
-    progressLabel.textContent = '心拍を検出しています...';
-    await sleep(50);
+    // ④ スペクトル減算（1回だけ）
+    applySpectralSubtraction(baseFiltered);
+    progressBar.style.width = '35%';
+    progressLabel.textContent = '心拍を検出しています（感度を自動調整中）...';
+    await sleep(30);
 
-    const bpm = detectBPM(filteredBuffer);
-    progressBar.style.width = '80%';
+    // ⑤ 感度を自動スイープ（1→5）して 120–180 BPM を探す
+    const gains = [4, 8, 14, 20, 28]; // 感度 1–5 に対応
+    let bestBpm = null, bestBuffer = null, bestSensIdx = 2;
+
+    for (let si = 0; si < gains.length; si++) {
+      progressBar.style.width = `${35 + si * 11}%`;
+      const workBuf = cloneBuffer(baseFiltered);
+      const d = workBuf.getChannelData(0);
+      const g = gains[si];
+      for (let i = 0; i < d.length; i++) d[i] *= g;
+      applyNoiseGate(workBuf);
+      const bpm = detectBPM(workBuf);
+      if (bpm !== null) {
+        // ③ 120–180 BPM を優先（母体心拍 60–90 BPM を除外）
+        if (bpm >= 120 && bpm <= 180) {
+          bestBpm = bpm; bestBuffer = workBuf; bestSensIdx = si; break;
+        }
+        if (bestBpm === null || Math.abs(bpm - 150) < Math.abs(bestBpm - 150)) {
+          bestBpm = bpm; bestBuffer = workBuf; bestSensIdx = si;
+        }
+      }
+      await sleep(20);
+    }
+
+    // 全感度で BPM 検出不可 → 感度3でフォールバック
+    if (bestBuffer === null) {
+      bestBuffer = cloneBuffer(baseFiltered);
+      const d = bestBuffer.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] *= 14;
+      applyNoiseGate(bestBuffer);
+      bestSensIdx = 2;
+    }
+
+    // 自動選択された感度をスライダーに反映
+    document.getElementById('sensitivity').value = bestSensIdx + 1;
+
+    filteredBuffer = bestBuffer;
+    progressBar.style.width = '92%';
     progressLabel.textContent = '音源を生成しています...';
     await sleep(50);
 
@@ -706,12 +774,12 @@ async function analyze() {
     await sleep(250);
     progressWrap.style.display = 'none';
 
-    if (bpm === null) {
+    if (bestBpm === null) {
       showError();
       return;
     }
 
-    document.getElementById('bpm-number').textContent = Math.round(bpm);
+    document.getElementById('bpm-number').textContent = Math.round(bestBpm);
 
     const audioEl = document.getElementById('result-audio');
     if (audioEl._blobUrl) URL.revokeObjectURL(audioEl._blobUrl);
@@ -720,7 +788,6 @@ async function analyze() {
 
     document.getElementById('results-wrap').style.display = 'block';
     document.getElementById('results-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    // results-wrap が visible になってから canvas サイズを確定して描画
     requestAnimationFrame(() => drawWaveform(filteredBuffer));
 
   } catch (e) {
@@ -730,9 +797,12 @@ async function analyze() {
 }
 
 // ─── Bandpass filter ──────────────────────────────────────────
-async function applyBandpassFilter(buffer) {
-  const sensitivity = parseInt(document.getElementById('sensitivity').value);
-  const gainAmount = 4 + (sensitivity - 1) * 6; // 4〜28
+// gainAmount が渡された場合はそちらを使用（自動スイープ用）
+async function applyBandpassFilter(buffer, gainAmount) {
+  if (gainAmount === undefined) {
+    const sensitivity = parseInt(document.getElementById('sensitivity').value);
+    gainAmount = 4 + (sensitivity - 1) * 6;
+  }
 
   const sampleRate = buffer.sampleRate;
   const length = buffer.length;
@@ -752,85 +822,91 @@ async function applyBandpassFilter(buffer) {
   const source = offlineCtx.createBufferSource();
   source.buffer = monoBuffer;
 
+  // ① HP 25Hz（低周波ノイズ除去）
   const hp = offlineCtx.createBiquadFilter();
   hp.type = 'highpass';
-  hp.frequency.value = 20;
+  hp.frequency.value = 25;
   hp.Q.value = 0.7;
 
-  const lp = offlineCtx.createBiquadFilter();
-  lp.type = 'lowpass';
-  lp.frequency.value = 150;
-  lp.Q.value = 0.7;
+  // ① LP 100Hz × 2段（40dB/octのロールオフで高域ノイズを強く遮断）
+  const lp1 = offlineCtx.createBiquadFilter();
+  lp1.type = 'lowpass';
+  lp1.frequency.value = 100;
+  lp1.Q.value = 0.7;
+
+  const lp2 = offlineCtx.createBiquadFilter();
+  lp2.type = 'lowpass';
+  lp2.frequency.value = 100;
+  lp2.Q.value = 0.7;
 
   const gain = offlineCtx.createGain();
   gain.gain.value = gainAmount;
 
   source.connect(hp);
-  hp.connect(lp);
-  lp.connect(gain);
+  hp.connect(lp1);
+  lp1.connect(lp2);
+  lp2.connect(gain);
   gain.connect(offlineCtx.destination);
 
   source.start(0);
   return await offlineCtx.startRendering();
 }
 
-// ─── BPM detection ────────────────────────────────────────────
+// ─── BPM detection（② オートコリレーション版）────────────────
 function detectBPM(buffer) {
   const data = buffer.getChannelData(0);
-  const sampleRate = buffer.sampleRate;
+  const sr   = buffer.sampleRate;
 
-  // Rectify + 10ms moving average → envelope
-  const windowMs10 = Math.floor(sampleRate * 0.01);
-  const envelope = new Float32Array(data.length);
-  let sum = 0;
+  // エネルギーエンベロープ（50ms RMSウィンドウ）
+  const winSamp = Math.floor(sr * 0.05);
+  const env = new Float32Array(data.length);
+  let sq = 0;
   for (let i = 0; i < data.length; i++) {
-    sum += Math.abs(data[i]);
-    if (i >= windowMs10) sum -= Math.abs(data[i - windowMs10]);
-    envelope[i] = sum / windowMs10;
+    sq += data[i] * data[i];
+    if (i >= winSamp) sq -= data[i - winSamp] * data[i - winSamp];
+    env[i] = sq / winSamp;
   }
 
-  // Smooth further with 50ms window
-  const windowMs50 = Math.floor(sampleRate * 0.05);
-  const smoothed = new Float32Array(data.length);
-  let sum2 = 0;
-  for (let i = 0; i < data.length; i++) {
-    sum2 += envelope[i];
-    if (i >= windowMs50) sum2 -= envelope[i - windowMs50];
-    smoothed[i] = sum2 / windowMs50;
-  }
+  // 200 Hz にダウンサンプリング（計算量削減）
+  const targetSR = 200;
+  const ratio  = Math.round(sr / targetSR);
+  const dsLen  = Math.floor(env.length / ratio);
+  const ds = new Float32Array(dsLen);
+  for (let i = 0; i < dsLen; i++) ds[i] = env[i * ratio];
 
-  // Adaptive threshold
+  // DC除去
   let mean = 0;
-  for (let i = 0; i < smoothed.length; i++) mean += smoothed[i];
-  mean /= smoothed.length;
-  const threshold = mean * 1.5;
+  for (let i = 0; i < dsLen; i++) mean += ds[i];
+  mean /= dsLen;
+  for (let i = 0; i < dsLen; i++) ds[i] -= mean;
 
-  // Peak detection (min distance = 0.27s = max 220 BPM)
-  const minDist = Math.floor(sampleRate * 0.27);
-  const peaks = [];
-  let lastPeak = -minDist;
+  // ②③ オートコリレーション：100–200 BPM のラグ範囲のみ計算
+  //   ③ 120–180 BPM = 胎児心拍帯域（母体 60–90 BPM を自動除外）
+  const minLag = Math.floor(targetSR * 60 / 200); // 60 サンプル
+  const maxLag = Math.floor(targetSR * 60 / 100); // 120 サンプル
 
-  for (let i = 1; i < smoothed.length - 1; i++) {
-    if (smoothed[i] > threshold &&
-        smoothed[i] >= smoothed[i - 1] &&
-        smoothed[i] >= smoothed[i + 1] &&
-        i - lastPeak >= minDist) {
-      peaks.push(i);
-      lastPeak = i;
-    }
+  const acor = new Float32Array(maxLag + 1);
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    let s = 0;
+    const cnt = dsLen - lag;
+    for (let i = 0; i < cnt; i++) s += ds[i] * ds[i + lag];
+    acor[lag] = s / cnt;
   }
 
-  if (peaks.length < 3) return null;
+  // ピーク検索
+  let bestLag = minLag, bestVal = -Infinity;
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    if (acor[lag] > bestVal) { bestVal = acor[lag]; bestLag = lag; }
+  }
 
-  // Median interval → BPM
-  const intervals = [];
-  for (let i = 1; i < peaks.length; i++) intervals.push(peaks[i] - peaks[i - 1]);
-  intervals.sort((a, b) => a - b);
-  const median = intervals[Math.floor(intervals.length / 2)];
-  const bpm = (sampleRate / median) * 60;
+  // 周期性がない場合は null（ピーク ≤ 平均×1.5 ならノイズとみなす）
+  let acorMean = 0;
+  for (let lag = minLag; lag <= maxLag; lag++) acorMean += acor[lag];
+  acorMean /= (maxLag - minLag + 1);
+  if (bestVal < acorMean * 1.5) return null;
 
-  if (bpm < 80 || bpm > 220) return null;
-  return bpm;
+  const bpm = (targetSR / bestLag) * 60;
+  return (bpm >= 100 && bpm <= 200) ? bpm : null;
 }
 
 // ─── Normalize ────────────────────────────────────────────────
@@ -886,6 +962,128 @@ function applyNoiseGate(buffer) {
       : Math.max(gain - releaseStep, 0);
     data[i] *= gain;
   }
+}
+
+// ─── Buffer clone ─────────────────────────────────────────────
+function cloneBuffer(buffer) {
+  const clone = new AudioBuffer({
+    numberOfChannels: 1,
+    length: buffer.length,
+    sampleRate: buffer.sampleRate
+  });
+  clone.getChannelData(0).set(buffer.getChannelData(0));
+  return clone;
+}
+
+// ─── FFT / IFFT（Cooley-Tukey、2のべき乗サイズ）───────────────
+function fft(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      let t = re[i]; re[i] = re[j]; re[j] = t;
+      t = im[i]; im[i] = im[j]; im[j] = t;
+    }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len;
+    const wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < (len >> 1); k++) {
+        const ur = re[i+k], ui = im[i+k];
+        const vr = re[i+k+(len>>1)]*cr - im[i+k+(len>>1)]*ci;
+        const vi = re[i+k+(len>>1)]*ci + im[i+k+(len>>1)]*cr;
+        re[i+k] = ur+vr; im[i+k] = ui+vi;
+        re[i+k+(len>>1)] = ur-vr; im[i+k+(len>>1)] = ui-vi;
+        const ncr = cr*wr - ci*wi; ci = cr*wi + ci*wr; cr = ncr;
+      }
+    }
+  }
+}
+
+function ifft(re, im) {
+  const n = im.length;
+  for (let i = 0; i < n; i++) im[i] = -im[i];
+  fft(re, im);
+  for (let i = 0; i < n; i++) { re[i] /= n; im[i] = -im[i] / n; }
+}
+
+// ─── Spectral subtraction（④）────────────────────────────────
+function applySpectralSubtraction(buffer) {
+  const data     = buffer.getChannelData(0);
+  const N        = data.length;
+  const FFT_SIZE = 8192;
+  const HOP      = FFT_SIZE >> 1;
+  const halfSize = FFT_SIZE / 2 + 1;
+
+  // Hanning ウィンドウ
+  const win = new Float32Array(FFT_SIZE);
+  for (let i = 0; i < FFT_SIZE; i++)
+    win[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (FFT_SIZE - 1)));
+
+  const numFrames = Math.floor((N - FFT_SIZE) / HOP) + 1;
+  const re = new Float32Array(FFT_SIZE);
+  const im = new Float32Array(FFT_SIZE);
+
+  // 雑音フロア推定：全フレームから等間隔にサンプリングして 20 パーセンタイルを取る
+  const sampleStep = Math.max(1, Math.floor(numFrames / 150));
+  const sampledMag = [];
+
+  for (let f = 0; f < numFrames; f += sampleStep) {
+    const start = f * HOP;
+    for (let i = 0; i < FFT_SIZE; i++) {
+      re[i] = (start + i < N) ? data[start + i] * win[i] : 0;
+      im[i] = 0;
+    }
+    fft(re, im);
+    const mag = new Float32Array(halfSize);
+    for (let k = 0; k < halfSize; k++) mag[k] = Math.sqrt(re[k]*re[k] + im[k]*im[k]);
+    sampledMag.push(mag);
+  }
+
+  const noiseMag = new Float32Array(halfSize);
+  const vals = new Float32Array(sampledMag.length);
+  for (let k = 0; k < halfSize; k++) {
+    for (let f = 0; f < sampledMag.length; f++) vals[f] = sampledMag[f][k];
+    vals.sort();
+    noiseMag[k] = vals[Math.floor(sampledMag.length * 0.20)];
+  }
+
+  // 全フレームにスペクトル減算を適用してオーバーラップ加算
+  const output  = new Float32Array(N);
+  const weights = new Float32Array(N);
+  const alpha = 2.5;  // 過剰減算係数
+  const beta  = 0.01; // スペクトルフロア（信号の 1% を下限に）
+
+  for (let f = 0; f < numFrames; f++) {
+    const start = f * HOP;
+    for (let i = 0; i < FFT_SIZE; i++) {
+      re[i] = (start + i < N) ? data[start + i] * win[i] : 0;
+      im[i] = 0;
+    }
+    fft(re, im);
+
+    for (let k = 0; k < halfSize; k++) {
+      const mag = Math.sqrt(re[k]*re[k] + im[k]*im[k]) + 1e-30;
+      const sub = Math.max(mag - alpha * noiseMag[k], beta * mag);
+      const g   = sub / mag;
+      re[k] *= g; im[k] *= g;
+      if (k > 0 && k < FFT_SIZE / 2) { re[FFT_SIZE-k] *= g; im[FFT_SIZE-k] *= g; }
+    }
+
+    ifft(re, im);
+
+    for (let i = 0; i < FFT_SIZE; i++) {
+      const idx = start + i;
+      if (idx < N) { output[idx] += re[i] * win[i]; weights[idx] += win[i] * win[i]; }
+    }
+  }
+
+  for (let i = 0; i < N; i++)
+    data[i] = weights[i] > 1e-6 ? output[i] / weights[i] : 0;
 }
 
 // ─── Waveform canvas ──────────────────────────────────────────
