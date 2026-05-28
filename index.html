@@ -317,6 +317,22 @@
     }
 
     .download-btn:active { opacity: 0.8; }
+
+    .save-img-btn {
+      width: 100%;
+      height: 56px;
+      border-radius: 28px;
+      border: none;
+      background: linear-gradient(135deg, #a8d8a8, #5aaa7a);
+      color: white;
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 10px;
+      transition: opacity 0.15s;
+    }
+
+    .save-img-btn:active { opacity: 0.8; }
   </style>
 </head>
 <body>
@@ -474,6 +490,13 @@
     <audio id="result-audio" controls
            style="width:100%;margin-bottom:14px;border-radius:8px;accent-color:#e85a8a;display:block"></audio>
     <button class="download-btn" id="download-btn">WAVファイルを保存する</button>
+    <button class="save-img-btn" id="save-img-btn">波形動画として保存する</button>
+    <div id="video-progress" style="display:none;padding-top:12px">
+      <div class="progress-bar-bg">
+        <div class="progress-bar" id="video-pb"></div>
+      </div>
+      <div id="video-pb-label" style="font-size:12px;color:#a0756a;text-align:center;margin-top:6px">準備中...</div>
+    </div>
   </div>
 </div>
 
@@ -981,6 +1004,209 @@ document.getElementById('download-btn').addEventListener('click', async () => {
   a.click();
   URL.revokeObjectURL(url);
 });
+
+// ─── Save waveform video ──────────────────────────────────────
+document.getElementById('save-img-btn').addEventListener('click', saveWaveformVideo);
+
+async function saveWaveformVideo() {
+  if (!filteredBuffer || !wavBlob) return;
+
+  const btn = document.getElementById('save-img-btn');
+  const progressWrap = document.getElementById('video-progress');
+  const pb  = document.getElementById('video-pb');
+  const pbLabel = document.getElementById('video-pb-label');
+
+  btn.disabled = true;
+  progressWrap.style.display = 'block';
+  pb.style.width = '0%';
+  pbLabel.textContent = '準備中...';
+
+  try {
+    const bpmText = document.getElementById('bpm-number').textContent;
+    const W = 360, H = 260;
+    const wx = 16, wy = 52, ww = W - 32, wh = 140;
+
+    // 波形列ごとのmin/maxを事前計算
+    const data = filteredBuffer.getChannelData(0);
+    let maxAbs = 0;
+    for (let i = 0; i < data.length; i++) if (Math.abs(data[i]) > maxAbs) maxAbs = Math.abs(data[i]);
+    const wfScale = maxAbs > 0.00001 ? 0.88 / maxAbs : 1;
+    const step = Math.max(1, Math.ceil(data.length / ww));
+    const colMin = new Float32Array(ww);
+    const colMax = new Float32Array(ww);
+    for (let x = 0; x < ww; x++) {
+      let mn = 0, mx = 0;
+      for (let j = 0; j < step; j++) {
+        const idx = x * step + j;
+        if (idx < data.length) {
+          const v = data[idx] * wfScale;
+          if (v < mn) mn = v; if (v > mx) mx = v;
+        }
+      }
+      colMin[x] = mn; colMax[x] = mx;
+    }
+
+    // オフスクリーンcanvas（DPR=1固定、MediaRecorder向け）
+    const off = document.createElement('canvas');
+    off.width = W; off.height = H;
+    const ctx = off.getContext('2d');
+
+    if (!off.captureStream) throw new Error('captureStream not supported');
+
+    const d = new Date();
+    const dateStr = `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;
+
+    function drawFrame(progress) {
+      ctx.fillStyle = '#fdf6f0';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#e85a8a';
+      ctx.fillRect(0, 0, W, 4);
+
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#3d2b1f';
+      ctx.font = 'bold 15px -apple-system, Helvetica, sans-serif';
+      ctx.fillText('赤ちゃんの心拍', W / 2, 26);
+      ctx.font = '11px -apple-system, Helvetica, sans-serif';
+      ctx.fillStyle = '#a0756a';
+      ctx.fillText(dateStr, W / 2, 42);
+
+      const r = 8;
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(wx + r, wy); ctx.lineTo(wx + ww - r, wy);
+      ctx.arcTo(wx + ww, wy, wx + ww, wy + r, r);
+      ctx.lineTo(wx + ww, wy + wh - r);
+      ctx.arcTo(wx + ww, wy + wh, wx + ww - r, wy + wh, r);
+      ctx.lineTo(wx + r, wy + wh);
+      ctx.arcTo(wx, wy + wh, wx, wy + wh - r, r);
+      ctx.lineTo(wx, wy + r);
+      ctx.arcTo(wx, wy, wx + r, wy, r);
+      ctx.closePath(); ctx.clip();
+
+      ctx.fillStyle = '#fff8f5';
+      ctx.fillRect(wx, wy, ww, wh);
+
+      // 再生済み領域を薄いピンクで塗る
+      const playedW = Math.floor(progress * ww);
+      ctx.fillStyle = 'rgba(232,90,138,0.10)';
+      ctx.fillRect(wx, wy, playedW, wh);
+
+      ctx.beginPath(); ctx.strokeStyle = '#f0d0d8'; ctx.lineWidth = 0.5;
+      ctx.moveTo(wx, wy + wh / 2); ctx.lineTo(wx + ww, wy + wh / 2); ctx.stroke();
+
+      ctx.beginPath(); ctx.strokeStyle = '#e85a8a'; ctx.lineWidth = 1.5;
+      ctx.moveTo(wx, wy + wh / 2);
+      for (let x = 0; x < ww; x++) {
+        ctx.lineTo(wx + x, wy + wh / 2 - colMax[x] * (wh / 2));
+        ctx.lineTo(wx + x, wy + wh / 2 - colMin[x] * (wh / 2));
+      }
+      ctx.stroke();
+
+      // 再生ヘッド
+      if (progress > 0 && progress < 1) {
+        const phX = wx + playedW;
+        ctx.beginPath(); ctx.strokeStyle = '#e85a8a'; ctx.lineWidth = 2;
+        ctx.moveTo(phX, wy); ctx.lineTo(phX, wy + wh); ctx.stroke();
+      }
+
+      ctx.restore();
+
+      ctx.textAlign = 'center';
+      ctx.font = '300 44px -apple-system, Helvetica, sans-serif';
+      ctx.fillStyle = '#e85a8a';
+      ctx.fillText(bpmText, W / 2, wy + wh + 50);
+      ctx.font = '12px -apple-system, Helvetica, sans-serif';
+      ctx.fillStyle = '#a0756a';
+      ctx.fillText('BPM（推定心拍数）', W / 2, wy + wh + 68);
+      ctx.font = '9px -apple-system, Helvetica, sans-serif';
+      ctx.fillStyle = '#d4b0a8';
+      ctx.fillText('赤ちゃんの心拍アプリ', W / 2, H - 8);
+    }
+
+    drawFrame(0);
+
+    // 音声セットアップ
+    const videoAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (videoAudioCtx.state === 'suspended') await videoAudioCtx.resume();
+    const wavAB = await wavBlob.arrayBuffer();
+    const decodedAudio = await videoAudioCtx.decodeAudioData(wavAB);
+    const duration = Math.min(decodedAudio.duration, 60);
+
+    const dest = videoAudioCtx.createMediaStreamDestination();
+    const videoStream = off.captureStream(30);
+    const combined = new MediaStream([
+      videoStream.getVideoTracks()[0],
+      dest.stream.getAudioTracks()[0]
+    ]);
+
+    const mimeTypes = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+    const mimeType = mimeTypes.find(t => MediaRecorder.isTypeSupported(t)) || '';
+    const chunks = [];
+    const mr = new MediaRecorder(combined, mimeType ? { mimeType } : {});
+    mr.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+
+    let source = null;
+    let startMs = 0;
+    let animFrame;
+
+    function animate() {
+      const elapsed = (Date.now() - startMs) / 1000;
+      const progress = Math.min(elapsed / duration, 1);
+      drawFrame(progress);
+      pb.style.width = Math.round(progress * 100) + '%';
+      pbLabel.textContent = `${Math.floor(elapsed)} / ${Math.ceil(duration)}秒`;
+      if (elapsed < duration) animFrame = requestAnimationFrame(animate);
+    }
+
+    mr.onstart = () => {
+      source = videoAudioCtx.createBufferSource();
+      source.buffer = decodedAudio;
+      source.connect(dest);
+      source.start(0, 0, duration);
+      startMs = Date.now();
+      animFrame = requestAnimationFrame(animate);
+    };
+
+    mr.start(1000);
+    await sleep(duration * 1000 + 500);
+    cancelAnimationFrame(animFrame);
+    mr.stop();
+    try { source?.stop(); } catch(e) {}
+
+    await new Promise(resolve => mr.addEventListener('stop', resolve, { once: true }));
+    videoAudioCtx.close();
+
+    if (chunks.length === 0) throw new Error('no data recorded');
+
+    pb.style.width = '100%';
+    pbLabel.textContent = '動画を保存します...';
+
+    const ext = mr.mimeType.includes('mp4') ? 'mp4' : 'webm';
+    const ds = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+    const videoBlob = new Blob(chunks, { type: mr.mimeType });
+    const file = new File([videoBlob], `heartbeat_${ds}.${ext}`, { type: mr.mimeType });
+
+    btn.disabled = false;
+    await sleep(400);
+    progressWrap.style.display = 'none';
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: '赤ちゃんの心拍' }); return; }
+      catch (e) { if (e.name === 'AbortError') return; }
+    }
+
+    const url = URL.createObjectURL(videoBlob);
+    const a = document.createElement('a');
+    a.href = url; a.download = file.name; a.click();
+    URL.revokeObjectURL(url);
+
+  } catch (e) {
+    console.error('Video save error:', e);
+    btn.disabled = false;
+    progressWrap.style.display = 'none';
+    alert('動画の生成に失敗しました。WAVファイルをご利用ください。');
+  }
+}
 
 // ─── Helpers ──────────────────────────────────────────────────
 function showError() {
