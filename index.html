@@ -535,12 +535,14 @@ async function startRecording() {
 
     // リアルタイム波形
     liveAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (liveAudioCtx.state === 'suspended') await liveAudioCtx.resume();
     const liveSource = liveAudioCtx.createMediaStreamSource(stream);
     liveAnalyser = liveAudioCtx.createAnalyser();
-    liveAnalyser.fftSize = 1024;
+    liveAnalyser.fftSize = 2048;
     liveSource.connect(liveAnalyser);
     document.getElementById('live-canvas').style.display = 'block';
-    requestAnimationFrame(startLiveDraw);
+    // display:block 後にレイアウトが確定してから canvas 幅を取得する
+    setTimeout(startLiveDraw, 50);
 
     recordingTimer = setInterval(() => {
       recordingSeconds++;
@@ -568,6 +570,7 @@ function stopRecording() {
 
 // ─── Live waveform ────────────────────────────────────────────
 function startLiveDraw() {
+  if (!liveAnalyser) return; // 50ms以内に録音停止された場合
   const canvas = document.getElementById('live-canvas');
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.offsetWidth || canvas.parentElement?.offsetWidth || 320;
