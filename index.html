@@ -417,6 +417,8 @@
   <div class="card-title">録音する</div>
   <button class="record-btn idle" id="record-btn">録音を開始する</button>
   <div class="record-timer" id="record-timer">0:00</div>
+  <canvas id="live-canvas"
+          style="display:none;width:100%;height:90px;margin-top:14px;border-radius:8px;background:#fff8f5"></canvas>
 </div>
 
 <div class="card">
@@ -484,6 +486,9 @@ let recordingSeconds = 0;
 let audioBuffer = null;
 let filteredBuffer = null;
 let wavBlob = null;
+let liveAudioCtx = null;
+let liveAnalyser = null;
+let liveAnimFrame = null;
 
 // ─── Tips ─────────────────────────────────────────────────────
 document.getElementById('tips-toggle').addEventListener('click', () => {
@@ -528,6 +533,15 @@ async function startRecording() {
     recordBtn.className = 'record-btn recording';
     recordTimer.style.display = 'block';
 
+    // リアルタイム波形
+    liveAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const liveSource = liveAudioCtx.createMediaStreamSource(stream);
+    liveAnalyser = liveAudioCtx.createAnalyser();
+    liveAnalyser.fftSize = 1024;
+    liveSource.connect(liveAnalyser);
+    document.getElementById('live-canvas').style.display = 'block';
+    requestAnimationFrame(startLiveDraw);
+
     recordingTimer = setInterval(() => {
       recordingSeconds++;
       const m = Math.floor(recordingSeconds / 60);
@@ -542,10 +556,60 @@ async function startRecording() {
 
 function stopRecording() {
   clearInterval(recordingTimer);
+  cancelAnimationFrame(liveAnimFrame);
+  liveAnimFrame = null;
+  if (liveAudioCtx) { liveAudioCtx.close(); liveAudioCtx = null; }
+  document.getElementById('live-canvas').style.display = 'none';
   recordBtn.textContent = '録音を開始する';
   recordBtn.className = 'record-btn idle';
   recordTimer.style.display = 'none';
   mediaRecorder.stop();
+}
+
+// ─── Live waveform ────────────────────────────────────────────
+function startLiveDraw() {
+  const canvas = document.getElementById('live-canvas');
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.offsetWidth || canvas.parentElement?.offsetWidth || 320;
+  const h = 90;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const bufferLength = liveAnalyser.frequencyBinCount; // 512
+  const dataArray = new Float32Array(bufferLength);
+  const sliceWidth = w / bufferLength;
+
+  function frame() {
+    liveAnimFrame = requestAnimationFrame(frame);
+    liveAnalyser.getFloatTimeDomainData(dataArray);
+
+    ctx.fillStyle = '#fff8f5';
+    ctx.fillRect(0, 0, w, h);
+
+    // 中央線
+    ctx.beginPath();
+    ctx.strokeStyle = '#f0d0d8';
+    ctx.lineWidth = 0.5;
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
+    ctx.stroke();
+
+    // 波形
+    ctx.beginPath();
+    ctx.strokeStyle = '#e85a8a';
+    ctx.lineWidth = 1.5;
+    let x = 0;
+    for (let i = 0; i < bufferLength; i++) {
+      const y = h / 2 - dataArray[i] * (h / 2 * 0.85);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      x += sliceWidth;
+    }
+    ctx.stroke();
+  }
+
+  frame();
 }
 
 // ─── File upload ──────────────────────────────────────────────
