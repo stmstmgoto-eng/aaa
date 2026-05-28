@@ -468,7 +468,9 @@
   </div>
 
   <div class="card">
-    <div class="card-title">心拍音源をダウンロード</div>
+    <div class="card-title">心拍音源を再生・保存</div>
+    <audio id="result-audio" controls
+           style="width:100%;margin-bottom:14px;border-radius:8px;accent-color:#e85a8a;display:block"></audio>
     <button class="download-btn" id="download-btn">WAVファイルを保存する</button>
   </div>
 </div>
@@ -599,10 +601,11 @@ async function analyze() {
     await sleep(50);
 
     const bpm = detectBPM(filteredBuffer);
-    progressBar.style.width = '80%';
+    progressBar.style.width = '75%';
     progressLabel.textContent = '音源を生成しています...';
     await sleep(50);
 
+    normalizeBuffer(filteredBuffer);
     wavBlob = encodeWAVFromBuffer(filteredBuffer);
     progressBar.style.width = '100%';
     await sleep(250);
@@ -615,6 +618,12 @@ async function analyze() {
 
     document.getElementById('bpm-number').textContent = Math.round(bpm);
     drawWaveform(filteredBuffer);
+
+    const audioEl = document.getElementById('result-audio');
+    if (audioEl._blobUrl) URL.revokeObjectURL(audioEl._blobUrl);
+    audioEl._blobUrl = URL.createObjectURL(wavBlob);
+    audioEl.src = audioEl._blobUrl;
+
     document.getElementById('results-wrap').style.display = 'block';
     document.getElementById('results-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
@@ -728,6 +737,18 @@ function detectBPM(buffer) {
   return bpm;
 }
 
+// ─── Normalize ────────────────────────────────────────────────
+function normalizeBuffer(buffer) {
+  const data = buffer.getChannelData(0);
+  let maxAbs = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (Math.abs(data[i]) > maxAbs) maxAbs = Math.abs(data[i]);
+  }
+  if (maxAbs < 0.0001) return;
+  const scale = 0.85 / maxAbs;
+  for (let i = 0; i < data.length; i++) data[i] *= scale;
+}
+
 // ─── Waveform canvas ──────────────────────────────────────────
 function drawWaveform(buffer) {
   const canvas = document.getElementById('waveform-canvas');
@@ -809,14 +830,28 @@ function encodeWAVFromBuffer(buffer) {
 }
 
 // ─── Download ─────────────────────────────────────────────────
-document.getElementById('download-btn').addEventListener('click', () => {
+document.getElementById('download-btn').addEventListener('click', async () => {
   if (!wavBlob) return;
+  const d = new Date();
+  const ds = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+  const fileName = `heartbeat_${ds}.wav`;
+  const file = new File([wavBlob], fileName, { type: 'audio/wav' });
+
+  // iOSではWeb Share APIでファイル保存（ファイルアプリ・音楽アプリ等に送れる）
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: '赤ちゃんの心拍' });
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+    }
+  }
+
+  // フォールバック：通常のダウンロード（PC・Android）
   const url = URL.createObjectURL(wavBlob);
   const a = document.createElement('a');
   a.href = url;
-  const d = new Date();
-  const ds = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
-  a.download = `heartbeat_${ds}.wav`;
+  a.download = fileName;
   a.click();
   URL.revokeObjectURL(url);
 });
